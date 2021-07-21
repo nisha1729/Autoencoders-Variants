@@ -70,9 +70,10 @@ def evaluation(autoencoder, test_loaders):
     loss_metric = nn.MSELoss()
     autoencoder.eval()
     loss_avg_per_class = []
-    for i, test_loader in enumerate(test_loaders):
+    z_acc = []
+    for i, test_loader in enumerate(test_loaders): # for each class
         total_loss_per_class=0
-        for data in test_loader:
+        for data in test_loader:  # for each mini batch
             images, labels = data
             images = Variable(images)
             images = images.view(images.size(0), -1)
@@ -117,7 +118,7 @@ if __name__ == '__main__':
     LOG_INTERVAL = 100
     TRAIN_SCRATCH = False        # whether to train a model from scratch
     BEST_VAL = float('inf')     # record the best val loss
-    NOISE = 20
+    NOISE = 0
 
     print('Noise: ', NOISE)
 
@@ -139,6 +140,7 @@ if __name__ == '__main__':
 
     else:
         autoencoder.load_state_dict(torch.load('./history/simple_autoencoder.pt'))
+        # print(autoencoder.decoder[0].weight.shape)
         evaluation(autoencoder, test_loader_class)
 
         autoencoder.cpu()
@@ -149,7 +151,7 @@ if __name__ == '__main__':
 
         plt.figure()
         plt.title('Latent Representation')
-        plt.imshow(z)
+        plt.imshow(z.detach().numpy())
         plt.savefig('./images/latent.png')
 
         # plot and save original and reconstruction images for comparisons
