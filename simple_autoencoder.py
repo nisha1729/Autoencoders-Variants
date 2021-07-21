@@ -7,12 +7,13 @@ import torch
 import torchvision
 import data_utils
 import matplotlib.pyplot as plt
-
+import numpy as np
 from torch import nn
 from torch.autograd import Variable
 
 cuda = torch.cuda.is_available()
 device = torch.device('cuda:0' if cuda else 'cpu')
+
 
 class Autoencoder(nn.Module):
     def __init__(self):
@@ -35,10 +36,14 @@ class Autoencoder(nn.Module):
             nn.Tanh()
         )
 
-    def forward(self, x):
+    def forward(self, x, idx, noise):
         x = self.encoder(x)
-        x = self.decoder(x)
-        return x
+        x = x.detach().numpy()
+        x[:, idx] = x[:, idx] + noise
+        x = torch.tensor(x).to(device)
+        y = self.decoder(x)
+        return x, y
+
 
 def model_training(autoencoder, train_loader, epoch):
     loss_metric = nn.MSELoss()
@@ -61,19 +66,38 @@ def model_training(autoencoder, train_loader, epoch):
             ))
 
 
-def evaluation(autoencoder, test_loader):
-    total_loss = 0
+def evaluation(autoencoder, test_loaders):
     loss_metric = nn.MSELoss()
     autoencoder.eval()
-    for i, data in enumerate(test_loader):
-        images, _ = data
-        images = Variable(images)
-        images = images.view(images.size(0), -1)
-        if cuda: images = images.to(device)
-        outputs = autoencoder(images)
-        loss = loss_metric(outputs, images)
-        total_loss += loss * len(images)
-    avg_loss = total_loss / len(test_loader.dataset)
+    loss_avg_per_class = []
+    for i, test_loader in enumerate(test_loaders):
+        total_loss_per_class=0
+        for data in test_loader:
+            images, labels = data
+            images = Variable(images)
+            images = images.view(images.size(0), -1)
+            if cuda: images = images.to(device)
+            loss_noise = np.zeros((32, 1))
+            for idx in range(32):
+                z, outputs = autoencoder(images,idx=idx, noise=NOISE) # add noise to each dimension
+                loss = loss_metric(outputs, images)
+                loss_noise[idx] += loss.detach().numpy()
+            # loss_per_batch = np.average(loss_noise)
+            total_loss_per_class += loss_noise * len(images)
+        loss_avg_per_class.append(total_loss_per_class /len(test_loader.dataset))
+    avg_loss = sum(map(sum, loss_avg_per_class))/32/10.
+    avg_loss = avg_loss.squeeze()
+    fig, ax = plt.subplots()
+    for i in range(10):
+        plt.plot(loss_avg_per_class[i], label=i)
+        ax.annotate(i, xy=(31, loss_avg_per_class[i][-1]),
+                    xytext=(1.02 * 31, loss_avg_per_class[i][-1]))
+
+    plt.xlabel("Dimension")
+    plt.ylabel("Loss")
+    # plt.title("Loss when weights are perturbed")
+    plt.legend(loc='upper center', ncol=5)
+    # plt.savefig('./images/noise_loss.png')
 
     print('\nAverage MSE Loss on Test set: {:.4f}'.format(avg_loss))
 
@@ -91,11 +115,14 @@ if __name__ == '__main__':
     LEARNING_RATE = 1e-3
     WEIGHT_DECAY = 1e-5
     LOG_INTERVAL = 100
-    TRAIN_SCRATCH = True        # whether to train a model from scratch
+    TRAIN_SCRATCH = False        # whether to train a model from scratch
     BEST_VAL = float('inf')     # record the best val loss
+    NOISE = 20
+
+    print('Noise: ', NOISE)
 
     train_loader, test_loader = data_utils.load_mnist(BATCH_SIZE)
-
+    test_loader_class = data_utils.load_mnist_single_class(BATCH_SIZE)
     autoencoder = Autoencoder()
     if cuda: autoencoder.to(device)
 
@@ -107,18 +134,23 @@ if __name__ == '__main__':
             endtime = datetime.datetime.now()
             print(f'Train a epoch in {(endtime - starttime).seconds} seconds')
             # evaluate on test set and save best model
-            evaluation(autoencoder, test_loader)
-        print('Trainig Complete with best validation loss {:.4f}'.format(BEST_VAL))
+            evaluation(autoencoder, test_loader_class)
+        print('Training Complete with best validation loss {:.4f}'.format(BEST_VAL))
 
     else:
         autoencoder.load_state_dict(torch.load('./history/simple_autoencoder.pt'))
-        evaluation(autoencoder, test_loader)
+        evaluation(autoencoder, test_loader_class)
 
         autoencoder.cpu()
-        dataiter = iter(train_loader)
+        dataiter = iter(test_loader)
         images, _ = next(dataiter)
-        images = Variable(images[:32])
-        outputs = autoencoder(images.view(images.size(0), -1))
+        images = Variable(images[:20])
+        z, outputs = autoencoder(images.view(images.size(0), -1), idx=4, noise=NOISE)
+
+        plt.figure()
+        plt.title('Latent Representation')
+        plt.imshow(z)
+        plt.savefig('./images/latent.png')
 
         # plot and save original and reconstruction images for comparisons
         plt.figure()
@@ -130,4 +162,4 @@ if __name__ == '__main__':
         data_utils.imshow(torchvision.utils.make_grid(
             outputs.view(images.size(0), 1, 28, 28).data
         ))
-        plt.savefig('./images/simple_autoencoder.png')
+        plt.savefig('./images/autoencoder_noisy.png')
